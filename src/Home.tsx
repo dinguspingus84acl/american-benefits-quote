@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { Loader2 } from "lucide-react";
+import { LEADS_WEBHOOK_URL } from "./config";
 
 type StepId =
   | "age"
@@ -43,6 +44,51 @@ export default function Home() {
   // Loading screen simulation states
   const [loadingStep, setLoadingStep] = useState<number>(0);
 
+  // UTM params captured from the page URL on first load
+  const [utmParams, setUtmParams] = useState<Record<string, string>>({});
+
+  // Capture utm_* + referrer once on mount
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const utms: Record<string, string> = {};
+    ["utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content"].forEach((key) => {
+      const val = params.get(key);
+      if (val) utms[key] = val;
+    });
+    if (document.referrer) utms.referrer = document.referrer;
+    setUtmParams(utms);
+  }, []);
+
+  // Submit the lead to Google Sheets via Apps Script webhook.
+  // Uses text/plain so the browser does NOT send a CORS preflight
+  // (Apps Script web apps don't handle OPTIONS requests). The Apps
+  // Script parses the body as JSON server-side.
+  const submitLead = async () => {
+    if (!LEADS_WEBHOOK_URL || LEADS_WEBHOOK_URL.startsWith("PASTE_")) {
+      console.warn("LEADS_WEBHOOK_URL not configured — skipping submission");
+      return;
+    }
+    try {
+      await fetch(LEADS_WEBHOOK_URL, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify({
+          age,
+          beneficiary,
+          zip,
+          firstName,
+          lastName,
+          beneficiaryName,
+          email,
+          phone,
+          ...utmParams,
+        }),
+      });
+    } catch (err) {
+      console.error("Lead submission failed:", err);
+    }
+  };
+
   useEffect(() => {
     // Slowly increment visitor count to simulate live traffic
     const interval = setInterval(() => {
@@ -54,6 +100,11 @@ export default function Home() {
   // Handle loading screen step progression
   useEffect(() => {
     if (currentStep === "loading") {
+      // Fire the lead submission in parallel with the loading animation.
+      // We don't await it — the funnel proceeds to "congrats" regardless
+      // of whether the POST succeeds, so a network blip doesn't block the user.
+      submitLead();
+
       setLoadingStep(0);
       const timer1 = setTimeout(() => setLoadingStep(1), 1000);
       const timer2 = setTimeout(() => setLoadingStep(2), 2000);
